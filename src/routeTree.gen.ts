@@ -10,33 +10,80 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthRouteImport } from './routes/auth'
+import { Route as EExamIdRouteImport } from './routes/e.$examId'
+import { Route as ExamsExamIdRouteImport } from './routes/exams.$examId'
+import { Route as ExamsExamIdResponsesRouteImport } from './routes/exams.$examId.responses'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthRoute = AuthRouteImport.update({
+  id: '/auth',
+  path: '/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EExamIdRoute = EExamIdRouteImport.update({
+  id: '/e/$examId',
+  path: '/e/$examId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExamsExamIdRoute = ExamsExamIdRouteImport.update({
+  id: '/exams/$examId',
+  path: '/exams/$examId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExamsExamIdResponsesRoute = ExamsExamIdResponsesRouteImport.update({
+  id: '/responses',
+  path: '/responses',
+  getParentRoute: () => ExamsExamIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/auth': typeof AuthRoute
+  '/e/$examId': typeof EExamIdRoute
+  '/exams/$examId': typeof ExamsExamIdRouteWithChildren
+  '/exams/$examId/responses': typeof ExamsExamIdResponsesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/auth': typeof AuthRoute
+  '/e/$examId': typeof EExamIdRoute
+  '/exams/$examId': typeof ExamsExamIdRouteWithChildren
+  '/exams/$examId/responses': typeof ExamsExamIdResponsesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/auth': typeof AuthRoute
+  '/e/$examId': typeof EExamIdRoute
+  '/exams/$examId': typeof ExamsExamIdRouteWithChildren
+  '/exams/$examId/responses': typeof ExamsExamIdResponsesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    '/' | '/auth' | '/e/$examId' | '/exams/$examId' | '/exams/$examId/responses'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    '/' | '/auth' | '/e/$examId' | '/exams/$examId' | '/exams/$examId/responses'
+  id:
+    | '__root__'
+    | '/'
+    | '/auth'
+    | '/e/$examId'
+    | '/exams/$examId'
+    | '/exams/$examId/responses'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AuthRoute: typeof AuthRoute
+  EExamIdRoute: typeof EExamIdRoute
+  ExamsExamIdRoute: typeof ExamsExamIdRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +95,54 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/e/$examId': {
+      id: '/e/$examId'
+      path: '/e/$examId'
+      fullPath: '/e/$examId'
+      preLoaderRoute: typeof EExamIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/exams/$examId': {
+      id: '/exams/$examId'
+      path: '/exams/$examId'
+      fullPath: '/exams/$examId'
+      preLoaderRoute: typeof ExamsExamIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/exams/$examId/responses': {
+      id: '/exams/$examId/responses'
+      path: '/responses'
+      fullPath: '/exams/$examId/responses'
+      preLoaderRoute: typeof ExamsExamIdResponsesRouteImport
+      parentRoute: typeof ExamsExamIdRoute
+    }
   }
 }
 
+interface ExamsExamIdRouteChildren {
+  ExamsExamIdResponsesRoute: typeof ExamsExamIdResponsesRoute
+}
+
+const ExamsExamIdRouteChildren: ExamsExamIdRouteChildren = {
+  ExamsExamIdResponsesRoute: ExamsExamIdResponsesRoute,
+}
+
+const ExamsExamIdRouteWithChildren = ExamsExamIdRoute._addFileChildren(
+  ExamsExamIdRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AuthRoute: AuthRoute,
+  EExamIdRoute: EExamIdRoute,
+  ExamsExamIdRoute: ExamsExamIdRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
