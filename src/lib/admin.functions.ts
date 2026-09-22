@@ -140,9 +140,10 @@ export const saveQuestion = createServerFn({ method: "POST" })
       .from("questions")
       .select("id", { count: "exact", head: true })
       .eq("exam_id", data.exam_id);
+    const { id: _omit, ...rest } = data;
     const { data: q, error } = await context.supabase
       .from("questions")
-      .insert({ ...data, position: count ?? 0 })
+      .insert({ ...rest, position: count ?? 0 })
       .select()
       .single();
     if (error) throw new Error(error.message);
