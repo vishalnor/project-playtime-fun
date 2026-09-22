@@ -4,7 +4,7 @@ import { z } from "zod";
 const uuid = z.string().uuid();
 
 export const getPublicExam = createServerFn({ method: "GET" })
-  .inputValidator((d: unknown) => z.object({ examId: uuid }).parse(d))
+  .validator((d: unknown) => z.object({ examId: uuid }).parse(d))
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
@@ -29,7 +29,7 @@ export const getPublicExam = createServerFn({ method: "GET" })
   });
 
 export const submitExam = createServerFn({ method: "POST" })
-  .inputValidator((d: unknown) =>
+  .validator((d: unknown) =>
     z
       .object({
         examId: uuid,

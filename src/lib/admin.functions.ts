@@ -61,7 +61,7 @@ export const listExams = createServerFn({ method: "GET" })
 
 export const getExam = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => z.object({ examId: uuid }).parse(d))
+  .validator((d: unknown) => z.object({ examId: uuid }).parse(d))
   .handler(async ({ data, context }) => {
     const { data: exam, error } = await context.supabase
       .from("exams")
@@ -83,7 +83,7 @@ export const getExam = createServerFn({ method: "GET" })
 
 export const createExam = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => examInput.parse(d))
+  .validator((d: unknown) => examInput.parse(d))
   .handler(async ({ data, context }) => {
     const { data: exam, error } = await context.supabase
       .from("exams")
@@ -96,7 +96,7 @@ export const createExam = createServerFn({ method: "POST" })
 
 export const updateExam = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => examInput.partial().extend({ examId: uuid, published: z.boolean().optional() }).parse(d))
+  .validator((d: unknown) => examInput.partial().extend({ examId: uuid, published: z.boolean().optional() }).parse(d))
   .handler(async ({ data, context }) => {
     const { examId, ...raw } = data;
     const patch: import("@/integrations/supabase/types").Database["public"]["Tables"]["exams"]["Update"] =
@@ -113,7 +113,7 @@ export const updateExam = createServerFn({ method: "POST" })
 
 export const deleteExam = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => z.object({ examId: uuid }).parse(d))
+  .validator((d: unknown) => z.object({ examId: uuid }).parse(d))
   .handler(async ({ data, context }) => {
     const { error } = await context.supabase.from("exams").delete().eq("id", data.examId);
     if (error) throw new Error(error.message);
@@ -122,7 +122,7 @@ export const deleteExam = createServerFn({ method: "POST" })
 
 export const saveQuestion = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => questionInput.parse(d))
+  .validator((d: unknown) => questionInput.parse(d))
   .handler(async ({ data, context }) => {
     if (data.id) {
       const { id, ...patch } = data;
@@ -161,7 +161,7 @@ export const saveQuestion = createServerFn({ method: "POST" })
 
 export const deleteQuestion = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => z.object({ questionId: uuid }).parse(d))
+  .validator((d: unknown) => z.object({ questionId: uuid }).parse(d))
   .handler(async ({ data, context }) => {
     const { error } = await context.supabase.from("questions").delete().eq("id", data.questionId);
     if (error) throw new Error(error.message);
@@ -170,7 +170,7 @@ export const deleteQuestion = createServerFn({ method: "POST" })
 
 export const approveQuestion = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => z.object({ questionId: uuid }).parse(d))
+  .validator((d: unknown) => z.object({ questionId: uuid }).parse(d))
   .handler(async ({ data, context }) => {
     const { error } = await context.supabase
       .from("questions")
@@ -182,7 +182,7 @@ export const approveQuestion = createServerFn({ method: "POST" })
 
 export const listResponses = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => z.object({ examId: uuid }).parse(d))
+  .validator((d: unknown) => z.object({ examId: uuid }).parse(d))
   .handler(async ({ data, context }) => {
     const { data: exam } = await context.supabase
       .from("exams")
@@ -210,7 +210,7 @@ export const listResponses = createServerFn({ method: "GET" })
 
 export const generateQuestions = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) =>
+  .validator((d: unknown) =>
     z
       .object({
         examId: uuid,
@@ -230,17 +230,40 @@ export const generateQuestions = createServerFn({ method: "POST" })
       .maybeSingle();
     if (!exam) throw new Error("Exam not found");
 
-    const apiKey = process.env["LOVABLE_API_KEY"];
-    if (!apiKey) throw new Error("AI is not configured");
+    const apiKey =
+      process.env["GROQ_API_KEY"] ||
+      process.env["NVIDIA_API_KEY"] ||
+      process.env["GEMINI_API_KEY"] ||
+      process.env["OPENAI_API_KEY"] ||
+      process.env["LOVABLE_API_KEY"];
 
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    if (!apiKey) throw new Error("AI is not configured. Please set GROQ_API_KEY, NVIDIA_API_KEY, or GEMINI_API_KEY in your environment variables.");
+
+    let endpoint = "https://ai.gateway.lovable.dev/v1/chat/completions";
+    let model = "google/gemini-2.5-flash";
+
+    if (process.env["GROQ_API_KEY"]) {
+      endpoint = "https://api.groq.com/openai/v1/chat/completions";
+      model = process.env["GROQ_MODEL"] || "llama-3.3-70b-versatile";
+    } else if (process.env["NVIDIA_API_KEY"]) {
+      endpoint = "https://integrate.api.nvidia.com/v1/chat/completions";
+      model = process.env["NVIDIA_MODEL"] || "meta/llama-3.3-70b-instruct";
+    } else if (process.env["GEMINI_API_KEY"]) {
+      endpoint = `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`;
+      model = process.env["GEMINI_MODEL"] || "gemini-2.5-flash";
+    } else if (process.env["OPENAI_API_KEY"]) {
+      endpoint = "https://api.openai.com/v1/chat/completions";
+      model = process.env["OPENAI_MODEL"] || "gpt-4o-mini";
+    }
+
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-3.8-flash",
+        model,
         messages: [
           {
             role: "system",
@@ -254,7 +277,9 @@ export const generateQuestions = createServerFn({ method: "POST" })
             }\n\nReturn JSON of the form {"questions":[{"text":"...","options":["A","B","C","D"],"correct_index":0,"explanation":"..."}]}. Exactly 4 options each, one correct answer, no duplicates.`,
           },
         ],
-        response_format: { type: "json_object" },
+        ...(endpoint.includes("groq") || endpoint.includes("openai") || endpoint.includes("generativelanguage")
+          ? { response_format: { type: "json_object" } }
+          : {}),
       }),
     });
 
