@@ -125,15 +125,31 @@ function Responses() {
 
               {open && (
                 <div className="mt-3 flex flex-col gap-2 border-t border-white/70 pt-3">
+                  <p className="text-[12px] font-semibold text-slate-500">
+                    {questions.filter((q) => answers[q.id] === q.correct_index).length} of{" "}
+                    {questions.length} correct · {r.score}/{r.total_marks} marks
+                    {r.flagged ? " · flagged for tab switching" : ""}
+                  </p>
                   {questions.map((q, i) => {
                     const given = answers[q.id];
                     const correct = given === q.correct_index;
                     const options = (q.options as string[]) ?? [];
                     return (
                       <div key={q.id} className="rounded-2xl bg-white/70 p-3">
-                        <p className="text-[13px] font-semibold text-ink">
-                          {i + 1}. {q.text}
-                        </p>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-[13px] font-semibold text-ink">
+                            {i + 1}. {q.text}
+                          </p>
+                          <span
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                              correct
+                                ? "bg-success/15 text-success"
+                                : "bg-danger/12 text-danger"
+                            }`}
+                          >
+                            {correct ? `+${q.marks}` : "0"}/{q.marks}
+                          </span>
+                        </div>
                         <p className="mt-1 text-[12px] text-slate-500">
                           Answered:{" "}
                           <span className={correct ? "text-success" : "text-danger"}>

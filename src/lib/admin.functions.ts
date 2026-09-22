@@ -98,7 +98,9 @@ export const updateExam = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => examInput.partial().extend({ examId: uuid, published: z.boolean().optional() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { examId, ...patch } = data;
+    const { examId, ...raw } = data;
+    const patch: import("@/integrations/supabase/types").Database["public"]["Tables"]["exams"]["Update"] =
+      Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
     const { data: exam, error } = await context.supabase
       .from("exams")
       .update(patch)
@@ -137,9 +139,20 @@ export const saveQuestion = createServerFn({ method: "POST" })
       .from("questions")
       .select("id", { count: "exact", head: true })
       .eq("exam_id", data.exam_id);
+    const row: import("@/integrations/supabase/types").Database["public"]["Tables"]["questions"]["Insert"] =
+      {
+        exam_id: data.exam_id,
+        text: data.text,
+        options: data.options,
+        correct_index: data.correct_index,
+        marks: data.marks,
+        explanation: data.explanation,
+        approved: data.approved,
+        position: count ?? 0,
+      };
     const { data: q, error } = await context.supabase
       .from("questions")
-      .insert({ ...data, position: count ?? 0 })
+      .insert(row)
       .select()
       .single();
     if (error) throw new Error(error.message);
