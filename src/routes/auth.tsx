@@ -36,16 +36,28 @@ function AuthPage() {
     setBusy(true);
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            emailRedirectTo: window.location.origin,
             data: { full_name: name },
           },
         });
         if (error) throw error;
-        toast.success("Account created. Check your inbox if confirmation is required.");
+        
+        // Auto sign in if session wasn't immediately returned
+        if (!data.session) {
+          const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+          if (signInError) {
+            toast.success("Account created successfully!");
+          } else {
+            toast.success("Account created! Logging in...");
+            navigate({ to: "/" });
+          }
+        } else {
+          toast.success("Account created successfully!");
+          navigate({ to: "/" });
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -55,18 +67,6 @@ function AuthPage() {
     } finally {
       setBusy(false);
     }
-  }
-
-  async function google() {
-    const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
-    });
-    if (result.error) {
-      toast.error("Google sign-in failed");
-      return;
-    }
-    if (result.redirected) return;
-    navigate({ to: "/" });
   }
 
   return (
@@ -124,14 +124,6 @@ function AuthPage() {
               {busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}
             </button>
           </form>
-
-          <button
-            type="button"
-            onClick={google}
-            className="mt-2.5 w-full rounded-2xl bg-white/70 py-3 text-sm font-semibold text-ink ring-1 ring-white/70"
-          >
-            Continue with Google
-          </button>
 
           <button
             type="button"
