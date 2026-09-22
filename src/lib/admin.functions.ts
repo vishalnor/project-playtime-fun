@@ -139,10 +139,20 @@ export const saveQuestion = createServerFn({ method: "POST" })
       .from("questions")
       .select("id", { count: "exact", head: true })
       .eq("exam_id", data.exam_id);
-    const { id: _omit, ...rest } = data;
+    const row: import("@/integrations/supabase/types").Database["public"]["Tables"]["questions"]["Insert"] =
+      {
+        exam_id: data.exam_id,
+        text: data.text,
+        options: data.options,
+        correct_index: data.correct_index,
+        marks: data.marks,
+        explanation: data.explanation,
+        approved: data.approved,
+        position: count ?? 0,
+      };
     const { data: q, error } = await context.supabase
       .from("questions")
-      .insert({ ...rest, position: count ?? 0 })
+      .insert(row)
       .select()
       .single();
     if (error) throw new Error(error.message);
