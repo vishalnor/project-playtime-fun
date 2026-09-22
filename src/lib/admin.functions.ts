@@ -99,9 +99,8 @@ export const updateExam = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => examInput.partial().extend({ examId: uuid, published: z.boolean().optional() }).parse(d))
   .handler(async ({ data, context }) => {
     const { examId, ...raw } = data;
-    const patch = Object.fromEntries(
-      Object.entries(raw).filter(([, v]) => v !== undefined),
-    ) as Record<string, unknown>;
+    const patch: import("@/integrations/supabase/types").Database["public"]["Tables"]["exams"]["Update"] =
+      Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
     const { data: exam, error } = await context.supabase
       .from("exams")
       .update(patch)
