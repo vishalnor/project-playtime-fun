@@ -247,7 +247,7 @@ export const generateQuestions = createServerFn({ method: "POST" })
       model = process.env["GROQ_MODEL"] || "llama-3.3-70b-versatile";
     } else if (process.env["NVIDIA_API_KEY"]) {
       endpoint = "https://integrate.api.nvidia.com/v1/chat/completions";
-      model = process.env["NVIDIA_MODEL"] || "meta/llama-3.3-70b-instruct";
+      model = process.env["NVIDIA_MODEL"] || "meta/muse-glimmer-30b";
     } else if (process.env["GEMINI_API_KEY"]) {
       endpoint = `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`;
       model = process.env["GEMINI_MODEL"] || "gemini-2.5-flash";
