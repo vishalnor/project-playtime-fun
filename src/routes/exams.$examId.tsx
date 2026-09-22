@@ -3,13 +3,15 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
+import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { AppBackground, Eyebrow, Panel, Pill } from "@/components/glass";
 import { useAuth } from "@/hooks/useAuth";
 import {
-  approveQuestion,
-  deleteQuestion,
+  approveQuestions,
+  deleteQuestions,
   generateQuestions,
   getExam,
+  reorderQuestions,
   saveQuestion,
   updateExam,
 } from "@/lib/admin.functions";
@@ -20,12 +22,14 @@ export const Route = createFileRoute("/exams/$examId")({
       { title: "Manage exam · Lumen Exams" },
       {
         name: "description",
-        content: "Edit exam rules, add multiple-choice questions manually or generate them with AI.",
+        content:
+          "Edit exam rules, add multiple-choice questions manually or generate them with AI.",
       },
       { property: "og:title", content: "Manage exam · Lumen Exams" },
       {
         property: "og:description",
-        content: "Edit exam rules, add multiple-choice questions manually or generate them with AI.",
+        content:
+          "Edit exam rules, add multiple-choice questions manually or generate them with AI.",
       },
     ],
   }),
@@ -61,8 +65,9 @@ function ManageExam() {
 
   const update = useServerFn(updateExam);
   const save = useServerFn(saveQuestion);
-  const remove = useServerFn(deleteQuestion);
-  const approve = useServerFn(approveQuestion);
+  const remove = useServerFn(deleteQuestions);
+  const approve = useServerFn(approveQuestions);
+  const reorder = useServerFn(reorderQuestions);
   const generate = useServerFn(generateQuestions);
 
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -70,8 +75,40 @@ function ManageExam() {
   const [count, setCount] = useState(5);
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
   const [sourceText, setSourceText] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Question ids with a delete/approve request in flight, to show per-item spinners.
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const [elapsed, setElapsed] = useState(0);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["exam", examId] });
+
+  const markBusy = (ids: string[], busy: boolean) =>
+    setBusyIds((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (busy) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+
+  const toggleSelected = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const setSelectedMany = (ids: string[], on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
 
   const settingsMut = useMutation({
     mutationFn: (patch: Record<string, unknown>) => update({ data: { examId, ...patch } }),
@@ -102,15 +139,53 @@ function ManageExam() {
   });
 
   const deleteMut = useMutation({
-    mutationFn: (questionId: string) => remove({ data: { questionId } }),
-    onSuccess: invalidate,
+    mutationFn: (ids: string[]) => remove({ data: { examId, questionIds: ids } }),
+    onMutate: (ids) => markBusy(ids, true),
+    onSuccess: async (_r, ids) => {
+      await invalidate();
+      setSelectedMany(ids, false);
+      if (ids.length > 1) toast.success(`${ids.length} questions deleted`);
+    },
     onError: (e: Error) => toast.error(e.message),
+    onSettled: (_r, _e, ids) => markBusy(ids, false),
   });
 
   const approveMut = useMutation({
-    mutationFn: (questionId: string) => approve({ data: { questionId } }),
-    onSuccess: invalidate,
+    mutationFn: (ids: string[]) => approve({ data: { examId, questionIds: ids } }),
+    onMutate: (ids) => markBusy(ids, true),
+    onSuccess: async (_r, ids) => {
+      await invalidate();
+      setSelectedMany(ids, false);
+      if (ids.length > 1) toast.success(`${ids.length} questions added to exam`);
+    },
     onError: (e: Error) => toast.error(e.message),
+    onSettled: (_r, _e, ids) => markBusy(ids, false),
+  });
+
+  type ExamData = NonNullable<typeof data>;
+  const reorderMut = useMutation({
+    mutationFn: (orderedIds: string[]) => reorder({ data: { examId, orderedIds } }),
+    // Reorder instantly on screen, then persist; roll back on failure.
+    onMutate: async (orderedIds) => {
+      await qc.cancelQueries({ queryKey: ["exam", examId] });
+      const prev = qc.getQueryData<ExamData>(["exam", examId]);
+      if (prev) {
+        const byId = new Map(prev.questions.map((q) => [q.id, q]));
+        qc.setQueryData<ExamData>(["exam", examId], {
+          ...prev,
+          questions: orderedIds.flatMap((id, position) => {
+            const q = byId.get(id);
+            return q ? [{ ...q, position }] : [];
+          }),
+        });
+      }
+      return { prev };
+    },
+    onError: (e: Error, _ids, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["exam", examId], ctx.prev);
+      toast.error(e.message);
+    },
+    onSettled: invalidate,
   });
 
   const generateMut = useMutation({
@@ -132,6 +207,14 @@ function ManageExam() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // Seconds counter shown while AI generation is running.
+  useEffect(() => {
+    if (!generateMut.isPending) return;
+    setElapsed(0);
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [generateMut.isPending]);
+
   if (isLoading || !data) {
     return (
       <AppBackground>
@@ -143,6 +226,33 @@ function ManageExam() {
   const exam = data.exam;
   const approved = data.questions.filter((q) => q.approved);
   const drafts = data.questions.filter((q) => !q.approved);
+  const approvedIds = approved.map((q) => q.id);
+  const draftIds = drafts.map((q) => q.id);
+  const selectedApproved = approvedIds.filter((id) => selected.has(id));
+  const selectedDrafts = draftIds.filter((id) => selected.has(id));
+
+  // Swap a question with its neighbour inside its own list, keeping exam questions before drafts.
+  const move = (list: typeof approved, idx: number, dir: -1 | 1) => {
+    const j = idx + dir;
+    if (j < 0 || j >= list.length) return;
+    const next = [...list];
+    [next[idx], next[j]] = [next[j]!, next[idx]!];
+    const order = list === approved ? [...next, ...drafts] : [...approved, ...next];
+    reorderMut.mutate(order.map((q) => q.id));
+  };
+
+  const confirmDelete = (ids: string[], what: string) => {
+    if (ids.length && window.confirm(`Delete ${what}? This cannot be undone.`))
+      deleteMut.mutate(ids);
+  };
+
+  const toDraft = (q: (typeof approved)[number]): Draft => ({
+    id: q.id,
+    text: q.text,
+    options: (q.options as string[]) ?? ["", "", "", ""],
+    correct_index: q.correct_index,
+    marks: q.marks,
+  });
 
   return (
     <AppBackground>
@@ -293,7 +403,10 @@ function ManageExam() {
             ))}
           </div>
           <Field label="Marks">
-            <NumberInput value={draft.marks} onCommit={(v) => setDraft({ ...draft, marks: Math.max(1, v) })} />
+            <NumberInput
+              value={draft.marks}
+              onCommit={(v) => setDraft({ ...draft, marks: Math.max(1, v) })}
+            />
           </Field>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
@@ -321,9 +434,36 @@ function ManageExam() {
             </p>
           </Panel>
         )}
+        {approved.length > 0 && (
+          <BulkBar
+            ids={approvedIds}
+            selectedCount={selectedApproved.length}
+            onToggleAll={(on) => setSelectedMany(approvedIds, on)}
+          >
+            {selectedApproved.length > 0 && (
+              <BarButton
+                tone="danger"
+                loading={deleteMut.isPending && selectedApproved.some((id) => busyIds.has(id))}
+                onClick={() =>
+                  confirmDelete(selectedApproved, `${selectedApproved.length} selected question(s)`)
+                }
+              >
+                Delete selected
+              </BarButton>
+            )}
+            <BarButton
+              tone="danger"
+              loading={deleteMut.isPending && approvedIds.every((id) => busyIds.has(id))}
+              onClick={() => confirmDelete(approvedIds, `all ${approvedIds.length} exam questions`)}
+            >
+              Delete all
+            </BarButton>
+          </BulkBar>
+        )}
         {approved.map((q, idx) => (
-          <Panel key={q.id}>
+          <Panel key={q.id} className={busyIds.has(q.id) ? "opacity-50" : ""}>
             <div className="flex items-start gap-3">
+              <SelectBox checked={selected.has(q.id)} onChange={() => toggleSelected(q.id)} />
               <span className="grid size-7 shrink-0 place-items-center rounded-xl bg-brand/12 text-[12px] font-bold text-brand">
                 {idx + 1}
               </span>
@@ -335,26 +475,26 @@ function ManageExam() {
                   {q.source === "ai" ? " · AI" : ""}
                 </p>
               </div>
+              <MoveButtons
+                canUp={idx > 0}
+                canDown={idx < approved.length - 1}
+                onUp={() => move(approved, idx, -1)}
+                onDown={() => move(approved, idx, 1)}
+              />
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button
-                onClick={() =>
-                  setDraft({
-                    id: q.id,
-                    text: q.text,
-                    options: (q.options as string[]) ?? ["", "", "", ""],
-                    correct_index: q.correct_index,
-                    marks: q.marks,
-                  })
-                }
+                onClick={() => setDraft(toDraft(q))}
                 className="rounded-2xl bg-white/70 py-2.5 text-[12px] font-semibold text-ink ring-1 ring-white/70"
               >
                 Edit
               </button>
               <button
-                onClick={() => deleteMut.mutate(q.id)}
-                className="rounded-2xl bg-white/70 py-2.5 text-[12px] font-semibold text-danger ring-1 ring-white/70"
+                disabled={busyIds.has(q.id)}
+                onClick={() => deleteMut.mutate([q.id])}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-white/70 py-2.5 text-[12px] font-semibold text-danger ring-1 ring-white/70 disabled:opacity-60"
               >
+                {busyIds.has(q.id) && <Spinner />}
                 Delete
               </button>
             </div>
@@ -405,17 +545,85 @@ function ManageExam() {
           <button
             disabled={!topic.trim() || generateMut.isPending}
             onClick={() => generateMut.mutate()}
-            className="rounded-2xl bg-linear-to-br from-brand to-violet py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="flex items-center justify-center gap-2 rounded-2xl bg-linear-to-br from-brand to-violet py-3 text-sm font-semibold text-white disabled:opacity-50"
           >
-            {generateMut.isPending ? "Generating…" : "Generate questions"}
+            {generateMut.isPending ? (
+              <>
+                <Spinner />
+                Generating {count} question{count > 1 ? "s" : ""}… {elapsed}s
+              </>
+            ) : (
+              "Generate questions"
+            )}
           </button>
         </div>
 
+        {generateMut.isPending && (
+          <div className="mt-4 flex flex-col gap-2.5" aria-hidden>
+            {Array.from({ length: Math.min(count, 3) }, (_, i) => (
+              <div
+                key={i}
+                className="animate-pulse rounded-2xl bg-white/70 p-3 ring-1 ring-white/70"
+              >
+                <div className="h-3.5 w-4/5 rounded bg-slate-200" />
+                <div className="mt-3 h-2.5 w-1/2 rounded bg-slate-200" />
+                <div className="mt-2 h-2.5 w-2/5 rounded bg-slate-200" />
+                <div className="mt-2 h-2.5 w-3/5 rounded bg-slate-200" />
+              </div>
+            ))}
+          </div>
+        )}
+
         {drafts.length > 0 && (
           <div className="mt-4 flex flex-col gap-2.5">
-            {drafts.map((q) => (
-              <div key={q.id} className="rounded-2xl bg-white/70 p-3 ring-1 ring-white/70">
-                <p className="text-[14px] font-semibold text-ink">{q.text}</p>
+            <BulkBar
+              ids={draftIds}
+              selectedCount={selectedDrafts.length}
+              onToggleAll={(on) => setSelectedMany(draftIds, on)}
+            >
+              {selectedDrafts.length > 0 && (
+                <BarButton
+                  tone="brand"
+                  loading={approveMut.isPending && selectedDrafts.some((id) => busyIds.has(id))}
+                  onClick={() => approveMut.mutate(selectedDrafts)}
+                >
+                  Add selected
+                </BarButton>
+              )}
+              {selectedDrafts.length > 0 && (
+                <BarButton
+                  tone="danger"
+                  loading={deleteMut.isPending && selectedDrafts.some((id) => busyIds.has(id))}
+                  onClick={() => deleteMut.mutate(selectedDrafts)}
+                >
+                  Discard selected
+                </BarButton>
+              )}
+              <BarButton
+                tone="danger"
+                loading={deleteMut.isPending && draftIds.every((id) => busyIds.has(id))}
+                onClick={() => confirmDelete(draftIds, `all ${draftIds.length} draft questions`)}
+              >
+                Discard all
+              </BarButton>
+            </BulkBar>
+            {drafts.map((q, idx) => (
+              <div
+                key={q.id}
+                className={`rounded-2xl bg-white/70 p-3 ring-1 ring-white/70 ${
+                  busyIds.has(q.id) ? "opacity-50" : ""
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <SelectBox checked={selected.has(q.id)} onChange={() => toggleSelected(q.id)} />
+                  <p className="min-w-0 flex-1 text-[14px] font-semibold text-ink">{q.text}</p>
+                  <MoveButtons
+                    canUp={idx > 0}
+                    canDown={idx < drafts.length - 1}
+                    onUp={() => move(drafts, idx, -1)}
+                    onDown={() => move(drafts, idx, 1)}
+                  />
+                </div>
                 <ol className="mt-2 flex flex-col gap-1">
                   {((q.options as string[]) ?? []).map((o, i) => (
                     <li
@@ -430,29 +638,25 @@ function ManageExam() {
                 </ol>
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   <button
-                    onClick={() => approveMut.mutate(q.id)}
-                    className="rounded-xl bg-linear-to-br from-brand to-violet py-2 text-[12px] font-semibold text-white"
+                    disabled={busyIds.has(q.id)}
+                    onClick={() => approveMut.mutate([q.id])}
+                    className="flex items-center justify-center gap-1.5 rounded-xl bg-linear-to-br from-brand to-violet py-2 text-[12px] font-semibold text-white disabled:opacity-60"
                   >
+                    {approveMut.isPending && busyIds.has(q.id) && <Spinner />}
                     Add to exam
                   </button>
                   <button
-                    onClick={() =>
-                      setDraft({
-                        id: q.id,
-                        text: q.text,
-                        options: (q.options as string[]) ?? ["", "", "", ""],
-                        correct_index: q.correct_index,
-                        marks: q.marks,
-                      })
-                    }
+                    onClick={() => setDraft(toDraft(q))}
                     className="rounded-xl bg-white/80 py-2 text-[12px] font-semibold text-ink ring-1 ring-white/70"
                   >
                     Edit
                   </button>
                   <button
-                    onClick={() => deleteMut.mutate(q.id)}
-                    className="rounded-xl bg-white/80 py-2 text-[12px] font-semibold text-danger ring-1 ring-white/70"
+                    disabled={busyIds.has(q.id)}
+                    onClick={() => deleteMut.mutate([q.id])}
+                    className="flex items-center justify-center gap-1.5 rounded-xl bg-white/80 py-2 text-[12px] font-semibold text-danger ring-1 ring-white/70 disabled:opacity-60"
                   >
+                    {deleteMut.isPending && busyIds.has(q.id) && <Spinner />}
                     Discard
                   </button>
                 </div>
@@ -462,6 +666,111 @@ function ManageExam() {
         )}
       </Panel>
     </AppBackground>
+  );
+}
+
+function Spinner() {
+  return <Loader2 className="size-3.5 animate-spin" />;
+}
+
+function SelectBox({ checked, onChange }: { checked: boolean; onChange: () => void }) {
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      className="mt-1.5 size-4 shrink-0 cursor-pointer accent-brand"
+      aria-label="Select question"
+    />
+  );
+}
+
+function MoveButtons({
+  canUp,
+  canDown,
+  onUp,
+  onDown,
+}: {
+  canUp: boolean;
+  canDown: boolean;
+  onUp: () => void;
+  onDown: () => void;
+}) {
+  const cls =
+    "grid size-7 place-items-center rounded-lg bg-white/80 text-slate-500 ring-1 ring-white/70 disabled:opacity-30";
+  return (
+    <div className="flex shrink-0 flex-col gap-1">
+      <button disabled={!canUp} onClick={onUp} className={cls} aria-label="Move up" title="Move up">
+        <ChevronUp className="size-4" />
+      </button>
+      <button
+        disabled={!canDown}
+        onClick={onDown}
+        className={cls}
+        aria-label="Move down"
+        title="Move down"
+      >
+        <ChevronDown className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+function BulkBar({
+  ids,
+  selectedCount,
+  onToggleAll,
+  children,
+}: {
+  ids: string[];
+  selectedCount: number;
+  onToggleAll: (on: boolean) => void;
+  children: React.ReactNode;
+}) {
+  const all = ids.length > 0 && selectedCount === ids.length;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white/60 px-3 py-2 ring-1 ring-white/70">
+      <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-slate-500">
+        <input
+          type="checkbox"
+          checked={all}
+          ref={(el) => {
+            if (el) el.indeterminate = selectedCount > 0 && !all;
+          }}
+          onChange={() => onToggleAll(!all)}
+          className="size-4 accent-brand"
+        />
+        {selectedCount > 0 ? `${selectedCount} selected` : "Select all"}
+      </label>
+      <div className="flex flex-wrap gap-2">{children}</div>
+    </div>
+  );
+}
+
+function BarButton({
+  tone,
+  loading,
+  onClick,
+  children,
+}: {
+  tone: "brand" | "danger";
+  loading: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      disabled={loading}
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold disabled:opacity-60 ${
+        tone === "brand"
+          ? "bg-linear-to-br from-brand to-violet text-white"
+          : "bg-white/80 text-danger ring-1 ring-white/70"
+      }`}
+    >
+      {loading && <Spinner />}
+      {children}
+    </button>
   );
 }
 

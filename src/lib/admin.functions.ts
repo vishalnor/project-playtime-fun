@@ -4,6 +4,21 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
 const uuid = z.string().uuid();
 
+const AI_TIMEOUT_MS = 60_000;
+
+// Models sometimes wrap JSON in ```json fences or add prose around it.
+function extractJson(content: string): unknown {
+  const text = content.replace(/```(?:json)?/gi, "").trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start === -1 || end <= start) throw new Error("No JSON object found");
+    return JSON.parse(text.slice(start, end + 1));
+  }
+}
+
 const examInput = z.object({
   title: z.string().min(1).max(200),
   description: z.string().max(4000).default(""),
@@ -96,7 +111,9 @@ export const createExam = createServerFn({ method: "POST" })
 
 export const updateExam = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .validator((d: unknown) => examInput.partial().extend({ examId: uuid, published: z.boolean().optional() }).parse(d))
+  .validator((d: unknown) =>
+    examInput.partial().extend({ examId: uuid, published: z.boolean().optional() }).parse(d),
+  )
   .handler(async ({ data, context }) => {
     const { examId, ...raw } = data;
     const patch: import("@/integrations/supabase/types").Database["public"]["Tables"]["exams"]["Update"] =
@@ -180,6 +197,57 @@ export const approveQuestion = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const deleteQuestions = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d: unknown) =>
+    z.object({ examId: uuid, questionIds: z.array(uuid).min(1).max(500) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { error } = await context.supabase
+      .from("questions")
+      .delete()
+      .eq("exam_id", data.examId)
+      .in("id", data.questionIds);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const approveQuestions = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d: unknown) =>
+    z.object({ examId: uuid, questionIds: z.array(uuid).min(1).max(500) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { error } = await context.supabase
+      .from("questions")
+      .update({ approved: true })
+      .eq("exam_id", data.examId)
+      .in("id", data.questionIds);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+// Rewrites `position` so questions appear in the given order (first id = position 0).
+export const reorderQuestions = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d: unknown) =>
+    z.object({ examId: uuid, orderedIds: z.array(uuid).min(1).max(500) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const results = await Promise.all(
+      data.orderedIds.map((id, position) =>
+        context.supabase
+          .from("questions")
+          .update({ position })
+          .eq("exam_id", data.examId)
+          .eq("id", id),
+      ),
+    );
+    const failed = results.find((r) => r.error);
+    if (failed?.error) throw new Error(failed.error.message);
+    return { ok: true };
+  });
+
 export const listResponses = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .validator((d: unknown) => z.object({ examId: uuid }).parse(d))
@@ -237,7 +305,10 @@ export const generateQuestions = createServerFn({ method: "POST" })
       process.env["OPENAI_API_KEY"] ||
       process.env["LOVABLE_API_KEY"];
 
-    if (!apiKey) throw new Error("AI is not configured. Please set GROQ_API_KEY, NVIDIA_API_KEY, or GEMINI_API_KEY in your environment variables.");
+    if (!apiKey)
+      throw new Error(
+        "AI is not configured. Please set GROQ_API_KEY, NVIDIA_API_KEY, or GEMINI_API_KEY in your environment variables.",
+      );
 
     let endpoint = "https://ai.gateway.lovable.dev/v1/chat/completions";
     let model = "google/gemini-2.5-flash";
@@ -247,7 +318,8 @@ export const generateQuestions = createServerFn({ method: "POST" })
       model = process.env["GROQ_MODEL"] || "llama-3.3-70b-versatile";
     } else if (process.env["NVIDIA_API_KEY"]) {
       endpoint = "https://integrate.api.nvidia.com/v1/chat/completions";
-      model = process.env["NVIDIA_MODEL"] || "meta/muse-glimmer-30b";
+      // muse-glimmer-30b routinely takes 90s+ for this prompt; nemotron-3-super is fast.
+      model = process.env["NVIDIA_MODEL"] || "nvidia/nemotron-3-super-120b-a12b";
     } else if (process.env["GEMINI_API_KEY"]) {
       endpoint = `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`;
       model = process.env["GEMINI_MODEL"] || "gemini-2.5-flash";
@@ -256,39 +328,67 @@ export const generateQuestions = createServerFn({ method: "POST" })
       model = process.env["OPENAI_MODEL"] || "gpt-4o-mini";
     }
 
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You write clear multiple-choice exam questions. Always return valid JSON only.",
-          },
-          {
-            role: "user",
-            content: `Write ${data.count} ${data.difficulty} multiple-choice questions about "${data.topic}".${
-              data.sourceText ? `\n\nBase them on this source material:\n${data.sourceText}` : ""
-            }\n\nReturn JSON of the form {"questions":[{"text":"...","options":["A","B","C","D"],"correct_index":0,"explanation":"..."}]}. Exactly 4 options each, one correct answer, no duplicates.`,
-          },
-        ],
-        ...(endpoint.includes("groq") || endpoint.includes("openai") || endpoint.includes("generativelanguage")
-          ? { response_format: { type: "json_object" } }
-          : {}),
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: "POST",
+        signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: Math.min(8000, 1000 + data.count * 400),
+          temperature: 0.6,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You write clear multiple-choice exam questions. Always return valid JSON only.",
+            },
+            {
+              role: "user",
+              content: `Write ${data.count} ${data.difficulty} multiple-choice questions about "${data.topic}".${
+                data.sourceText ? `\n\nBase them on this source material:\n${data.sourceText}` : ""
+              }\n\nReturn JSON of the form {"questions":[{"text":"...","options":["A","B","C","D"],"correct_index":0,"explanation":"..."}]}. Exactly 4 options each, one correct answer, no duplicates.`,
+            },
+          ],
+          ...(endpoint.includes("groq") ||
+          endpoint.includes("openai") ||
+          endpoint.includes("generativelanguage")
+            ? { response_format: { type: "json_object" } }
+            : {}),
+          // Skip the reasoning phase on NVIDIA models: ~8s instead of ~30s for 5 questions.
+          ...(endpoint.includes("nvidia")
+            ? { chat_template_kwargs: { enable_thinking: false } }
+            : {}),
+        }),
+      });
+    } catch (e) {
+      if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
+        throw new Error(
+          `AI took longer than ${AI_TIMEOUT_MS / 1000}s (model: ${model}). Try fewer questions or try again.`,
+        );
+      }
+      throw new Error("Could not reach the AI service. Check your connection and try again.");
+    }
 
     if (res.status === 429) throw new Error("AI rate limit reached. Try again shortly.");
     if (res.status === 402) throw new Error("AI credits exhausted. Please top up.");
+    if (res.status === 404 || res.status === 410)
+      throw new Error(`AI model "${model}" is not available. Set a different model in your env.`);
     if (!res.ok) throw new Error(`AI request failed (${res.status})`);
 
-    const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const content = json.choices?.[0]?.message?.content ?? "{}";
+    const json = (await res.json()) as { choices?: { message?: { content?: string | null } }[] };
+    const content = json.choices?.[0]?.message?.content ?? "";
+
+    let payload: unknown;
+    try {
+      payload = extractJson(content);
+    } catch {
+      throw new Error("AI returned an unexpected format. Try again.");
+    }
 
     const parsed = z
       .object({
@@ -301,7 +401,7 @@ export const generateQuestions = createServerFn({ method: "POST" })
           }),
         ),
       })
-      .safeParse(JSON.parse(content));
+      .safeParse(payload);
 
     if (!parsed.success) throw new Error("AI returned an unexpected format. Try again.");
 
@@ -313,7 +413,7 @@ export const generateQuestions = createServerFn({ method: "POST" })
     const rows = parsed.data.questions.map((q, i) => ({
       exam_id: data.examId,
       text: q.text,
-      options: q.options,
+      options: q.options.map((o) => o.replace(/^\s*[A-D][).:]\s+/, "")),
       correct_index: q.correct_index,
       explanation: q.explanation ?? null,
       marks: data.marks,
