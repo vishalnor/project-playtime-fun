@@ -7,7 +7,7 @@ import { AppBackground, Eyebrow, Panel, Pill } from "@/components/glass";
 import { useAuth } from "@/hooks/useAuth";
 import { listResponses } from "@/lib/admin.functions";
 
-export const Route = createFileRoute("/exams/$examId/responses")({
+export const Route = createFileRoute("/exams_/$examId/responses")({
   head: () => ({
     meta: [
       { title: "Responses · Lumen Exams" },
