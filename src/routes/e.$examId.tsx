@@ -10,7 +10,10 @@ export const Route = createFileRoute("/e/$examId")({
   head: () => ({
     meta: [
       { title: "Take exam · Lumen Exams" },
-      { name: "description", content: "Enter your details and take this timed multiple-choice exam." },
+      {
+        name: "description",
+        content: "Enter your details and take this timed multiple-choice exam.",
+      },
       { property: "og:title", content: "Take exam · Lumen Exams" },
       {
         property: "og:description",
@@ -35,9 +38,10 @@ function TakeExam() {
   const fetchExam = useServerFn(getPublicExam);
   const submit = useServerFn(submitExam);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["public-exam", examId],
     queryFn: () => fetchExam({ data: { examId } }),
+    retry: 1,
   });
 
   const [stage, setStage] = useState<"entry" | "exam" | "done">("entry");
@@ -141,6 +145,28 @@ function TakeExam() {
     return (
       <AppBackground>
         <p className="pt-10 text-sm text-slate-400">Loading exam…</p>
+      </AppBackground>
+    );
+  }
+
+  // A server error (e.g. missing Supabase config on the host) is not the same as
+  // an unpublished exam — say which one it is instead of hiding the cause.
+  if (error) {
+    return (
+      <AppBackground>
+        <Panel className="mt-10" elevated>
+          <h1 className="font-display text-[20px] font-bold text-ink">Could not load this exam</h1>
+          <p className="mt-2 text-sm text-slate-500">
+            The server could not be reached. Please try again in a moment.
+          </p>
+          <p className="mt-2 text-[12px] break-words text-slate-400">{error.message}</p>
+          <button
+            onClick={() => refetch()}
+            className="mt-4 rounded-2xl bg-linear-to-br from-brand to-violet px-4 py-2.5 text-[12px] font-semibold text-white"
+          >
+            Try again
+          </button>
+        </Panel>
       </AppBackground>
     );
   }
