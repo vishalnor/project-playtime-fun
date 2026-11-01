@@ -318,8 +318,8 @@ export const generateQuestions = createServerFn({ method: "POST" })
       model = process.env["GROQ_MODEL"] || "llama-3.3-70b-versatile";
     } else if (process.env["NVIDIA_API_KEY"]) {
       endpoint = "https://integrate.api.nvidia.com/v1/chat/completions";
-      // muse-glimmer-30b routinely takes 90s+ for this prompt; nemotron-3-super is fast.
-      model = process.env["NVIDIA_MODEL"] || "nvidia/nemotron-3-super-120b-a12b";
+      // nemotron-3-super-120b-a12b now returns 404 for this account; lightning-30b answers in ~1s.
+      model = process.env["NVIDIA_MODEL"] || "nvidia/nemotron-3.5-lightning-30b-a3b";
     } else if (process.env["GEMINI_API_KEY"]) {
       endpoint = `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`;
       model = process.env["GEMINI_MODEL"] || "gemini-2.5-flash";
